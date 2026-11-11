@@ -1,0 +1,28 @@
+{
+  "name": "dtc-office-share",
+  "version": "1.0.0",
+  "description": "Self-hosted, LAN-based peer-to-peer file sharing web application for office networks.",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test tests/**/*.test.js"
+  },
+  "keywords": [
+    "lan",
+    "webrtc",
+    "p2p",
+    "file-share",
+    "snapdrop",
+    "toffeeshare",
+    "self-hosted",
+    "local-network"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

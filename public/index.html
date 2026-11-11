@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>DTC Office Share - Local LAN File Sharing</title>
+  <meta name="description" content="Fast, encrypted, direct peer-to-peer file sharing on your local office network. No internet or external servers required.">
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%230052cc'><path d='M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z'/></svg>">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Top Bar Header -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-logo">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <h1>DTC Office Share</h1>
+          <span class="badge badge-lan">LAN P2P Direct</span>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button id="btn-network-info" class="btn-icon" title="Network Connection Info" aria-label="Network Connection Info">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="12" y1="16" x2="12" y2="12"></line>
+            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- My Device Status Banner -->
+    <section class="device-card">
+      <div class="device-info">
+        <div class="device-avatar" id="my-device-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+            <line x1="8" y1="21" x2="16" y2="21"></line>
+            <line x1="12" y1="17" x2="12" y2="21"></line>
+          </svg>
+        </div>
+        <div class="device-details">
+          <span class="device-status-indicator online"></span>
+          <div class="device-name-row">
+            <span class="device-name" id="my-device-name">Detecting device...</span>
+            <button id="btn-edit-name" class="btn-mini" title="Edit device name">✎ Edit</button>
+          </div>
+          <p class="device-hint" id="my-device-meta">Scanning local network peers...</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Main Content Area: Device Radar / Discovery -->
+    <main class="main-content">
+      <div class="section-header">
+        <h2>Available Office Devices</h2>
+        <span class="peer-count" id="peer-count">0 nearby devices</span>
+      </div>
+
+      <!-- Radar Animation Container -->
+      <div class="radar-container" id="radar-container">
+        <div class="radar-circle radar-circle-1"></div>
+        <div class="radar-circle radar-circle-2"></div>
+        <div class="radar-circle radar-circle-3"></div>
+
+        <!-- Discovered Peers Container -->
+        <div class="peers-grid" id="peers-grid">
+          <div class="empty-state" id="empty-state">
+            <div class="empty-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M5 12.55a11 11 0 0 1 14.08 0"></path>
+                <path d="M1.42 9a16 16 0 0 1 21.16 0"></path>
+                <path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path>
+                <line x1="12" y1="20" x2="12.01" y2="20"></line>
+              </svg>
+            </div>
+            <h3>Waiting for nearby devices...</h3>
+            <p>Open this page on your phone, tablet or other office computer connected to the same Wi-Fi or Ethernet network.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Active File Transfers Section -->
+      <section class="transfers-section" id="transfers-section" style="display: none;">
+        <h3>Active Transfers</h3>
+        <div class="transfers-list" id="transfers-list"></div>
+      </section>
+
+      <!-- Completed Downloads Section -->
+      <section class="completed-section" id="completed-section" style="display: none;">
+        <h3>Received Files</h3>
+        <div class="completed-list" id="completed-list"></div>
+      </section>
+    </main>
+
+    <!-- Hidden Native File Inputs -->
+    <input type="file" id="file-input" multiple style="display: none;">
+
+    <!-- Transfer Request Modal (Accept / Reject) -->
+    <div class="modal-backdrop" id="modal-request" style="display: none;">
+      <div class="modal-content">
+        <div class="modal-header">
+          <div class="modal-icon-wrap incoming">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+          </div>
+          <h3>Incoming File Transfer</h3>
+        </div>
+        <div class="modal-body">
+          <p class="modal-sender-text">
+            <strong id="request-sender-name">Device</strong> wants to send you:
+          </p>
+          <div class="transfer-files-summary" id="request-files-summary">
+            <!-- Dynamically populated files list -->
+          </div>
+          <div class="transfer-total-info">
+            <span id="request-file-count">1 file</span> • <strong id="request-total-size">0 KB</strong>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button id="btn-reject-transfer" class="btn btn-secondary">Decline</button>
+          <button id="btn-accept-transfer" class="btn btn-primary">Accept & Download</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Edit Device Name Modal -->
+    <div class="modal-backdrop" id="modal-edit-name" style="display: none;">
+      <div class="modal-content modal-sm">
+        <div class="modal-header">
+          <h3>Change Device Name</h3>
+        </div>
+        <div class="modal-body">
+          <label for="input-device-name" class="form-label">How should other devices see you?</label>
+          <input type="text" id="input-device-name" class="form-input" maxlength="32" placeholder="e.g. Divya MacBook Pro">
+        </div>
+        <div class="modal-actions">
+          <button id="btn-cancel-name" class="btn btn-secondary">Cancel</button>
+          <button id="btn-save-name" class="btn btn-primary">Save Name</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Network Info Modal -->
+    <div class="modal-backdrop" id="modal-network-info" style="display: none;">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>LAN Network Access</h3>
+        </div>
+        <div class="modal-body">
+          <p>Connect your devices to the same office Wi-Fi or LAN network and open:</p>
+          <div class="network-urls-list" id="network-urls-list">
+            <code>Loading network addresses...</code>
+          </div>
+          <div class="callout-box">
+            <strong>Security & Privacy Note:</strong>
+            <p>DTC Office Share runs purely over your local network using direct WebRTC encrypted channels. Files are streamed directly device-to-device and are never stored on the server.</p>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button id="btn-close-network-info" class="btn btn-primary">Got it</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast Notification Banner -->
+    <div id="toast" class="toast" style="display: none;">
+      <span id="toast-message"></span>
+    </div>
+  </div>
+
+  <!-- Application Scripts -->
+  <script src="js/signaling.js"></script>
+  <script src="js/webrtc.js"></script>
+  <script src="js/transfer.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
