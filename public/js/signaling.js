@@ -1,5 +1,5 @@
 /**
- * DTC Office Share - WebSocket Signaling Client
+ * DTC Office Share - WebSocket Signaling Client (Harden V2)
  */
 
 class SignalingClient {
@@ -10,6 +10,9 @@ class SignalingClient {
     this.onTransferRequest = options.onTransferRequest || (() => {});
     this.onTransferResponse = options.onTransferResponse || (() => {});
     this.onTransferCancel = options.onTransferCancel || (() => {});
+    this.onTransferTimeout = options.onTransferTimeout || (() => {});
+    this.onAuthRequired = options.onAuthRequired || (() => {});
+    this.onAuthSuccess = options.onAuthSuccess || (() => {});
     this.onError = options.onError || (() => {});
     this.onOpen = options.onOpen || (() => {});
     this.onClose = options.onClose || (() => {});
@@ -19,11 +22,16 @@ class SignalingClient {
     this.peers = [];
     this.reconnectTimer = null;
     this.shouldReconnect = true;
+    this.accessCode = options.accessCode || '';
   }
 
   getDefaultWsUrl() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     return `${protocol}//${window.location.host}`;
+  }
+
+  setAccessCode(code) {
+    this.accessCode = code;
   }
 
   connect(deviceProfile) {
@@ -41,11 +49,12 @@ class SignalingClient {
         clearTimeout(this.reconnectTimer);
         this.reconnectTimer = null;
       }
-      // Send join message
+      // Send join message including optional accessCode
       this.send({
         type: 'join',
         name: deviceProfile.name,
-        deviceType: deviceProfile.deviceType
+        deviceType: deviceProfile.deviceType,
+        accessCode: this.accessCode || ''
       });
       this.onOpen();
     };
@@ -53,7 +62,7 @@ class SignalingClient {
     this.ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
-        this.handleMessage(msg);
+        this.handleMessage(msg, deviceProfile);
       } catch (err) {
         console.error('Signaling parse error:', err);
       }
@@ -79,8 +88,17 @@ class SignalingClient {
     }, 2500);
   }
 
-  handleMessage(msg) {
+  handleMessage(msg, deviceProfile) {
     switch (msg.type) {
+      case 'joined-success':
+        this.self = msg.self;
+        this.onAuthSuccess(msg.self);
+        break;
+
+      case 'auth-error':
+        this.onAuthRequired(msg.message);
+        break;
+
       case 'peers':
         this.self = msg.self;
         this.peers = msg.peers || [];
@@ -105,12 +123,20 @@ class SignalingClient {
         this.onTransferCancel(msg);
         break;
 
+      case 'transfer-timeout':
+        this.onTransferTimeout(msg);
+        break;
+
+      case 'transfer-rejected-server':
+        this.onError(`Transfer rejected: ${msg.message}`);
+        break;
+
       case 'error':
         this.onError(msg.message || 'Server error');
         break;
 
       case 'peer-not-found':
-        this.onError(`Peer is offline: ${msg.message}`);
+        this.onError(`Peer unavailable: ${msg.message}`);
         break;
 
       default:
@@ -142,4 +168,6 @@ class SignalingClient {
   }
 }
 
-window.SignalingClient = SignalingClient;
+if (typeof window !== 'undefined') {
+  window.SignalingClient = SignalingClient;
+}

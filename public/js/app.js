@@ -1,11 +1,10 @@
 /**
- * DTC Office Share - Main Frontend Application Logic
+ * DTC Office Share - Main Frontend Application Logic (Harden V2)
  */
 
 (function () {
   'use strict';
 
-  // --- Utility Functions ---
   function getDeviceType() {
     const ua = navigator.userAgent;
     if (/iPad|tablet/i.test(ua)) return 'tablet';
@@ -56,17 +55,17 @@
     }, duration);
   }
 
-  // --- Initial Profile Setup ---
   const deviceType = getDeviceType();
   const savedName = localStorage.getItem('dtc_device_name');
   const defaultName = savedName || `${deviceType.charAt(0).toUpperCase() + deviceType.slice(1)}-${Math.floor(1000 + Math.random() * 9000)}`;
+  const savedAccessCode = localStorage.getItem('dtc_access_code') || '';
 
   let currentProfile = {
     name: defaultName,
     deviceType: deviceType
   };
 
-  // --- DOM Elements ---
+  // DOM Elements
   const myDeviceNameEl = document.getElementById('my-device-name');
   const myDeviceMetaEl = document.getElementById('my-device-meta');
   const myDeviceIconEl = document.getElementById('my-device-icon');
@@ -86,6 +85,11 @@
   const btnCloseNetworkInfo = document.getElementById('btn-close-network-info');
   const networkUrlsList = document.getElementById('network-urls-list');
 
+  const modalAuth = document.getElementById('modal-auth');
+  const inputAccessCode = document.getElementById('input-access-code');
+  const btnSubmitAuth = document.getElementById('btn-submit-auth');
+  const authErrorMsg = document.getElementById('auth-error-msg');
+
   const modalRequest = document.getElementById('modal-request');
   const requestSenderName = document.getElementById('request-sender-name');
   const requestFilesSummary = document.getElementById('request-files-summary');
@@ -99,23 +103,27 @@
   const completedSection = document.getElementById('completed-section');
   const completedList = document.getElementById('completed-list');
 
-  // Update UI with initial profile
   myDeviceNameEl.textContent = currentProfile.name;
   myDeviceIconEl.innerHTML = getDeviceIconSvg(currentProfile.deviceType);
-  myDeviceMetaEl.textContent = `Connected as ${currentProfile.deviceType.toUpperCase()} on LAN`;
+  myDeviceMetaEl.textContent = `Connecting as ${currentProfile.deviceType.toUpperCase()} on LAN...`;
 
-  // --- Application State ---
+  // Fix: Map of active pending outgoing transfers keyed by transferId
+  const pendingOutgoingTransfers = new Map();
+  // Active pending incoming transfer request modal state
+  let pendingIncomingRequest = null;
   let selectedTargetPeerId = null;
-  let pendingIncomingTransfer = null; // { transferId, from, files, totalSize }
 
   // --- Transfer Engine ---
   const transferEngine = new TransferEngine({
     onProgress: (transferId, progress) => {
       renderTransferProgress(transferId, progress);
     },
+    onVerifying: (transferId, fileName) => {
+      setTransferVerifying(transferId, fileName);
+    },
     onComplete: (transferId, direction, info) => {
       removeTransferCard(transferId);
-      showToast(`${direction === 'send' ? 'Sent' : 'Received'} ${info.totalFiles} file(s) (${formatBytes(info.totalBytes)}) successfully!`);
+      showToast(`${direction === 'send' ? 'Sent' : 'Received and verified'} ${info.totalFiles} file(s) (${formatBytes(info.totalBytes)}) successfully!`);
     },
     onError: (transferId, errMessage) => {
       removeTransferCard(transferId);
@@ -129,11 +137,25 @@
 
   // --- Signaling Client ---
   const signaling = new SignalingClient({
+    accessCode: savedAccessCode,
     onOpen: () => {
       myDeviceMetaEl.textContent = `Online • ${currentProfile.deviceType.toUpperCase()} on LAN`;
     },
     onClose: () => {
       myDeviceMetaEl.textContent = 'Disconnected • Reconnecting to local server...';
+    },
+    onAuthRequired: (message) => {
+      modalAuth.style.display = 'flex';
+      authErrorMsg.textContent = message || 'Office access code required.';
+      inputAccessCode.focus();
+    },
+    onAuthSuccess: (self) => {
+      modalAuth.style.display = 'none';
+      authErrorMsg.textContent = '';
+      if (self) {
+        currentProfile.name = self.name;
+        myDeviceNameEl.textContent = self.name;
+      }
     },
     onPeersUpdate: (peers, self) => {
       if (self) {
@@ -154,6 +176,11 @@
     onTransferCancel: (msg) => {
       handleTransferCancel(msg);
     },
+    onTransferTimeout: (msg) => {
+      pendingOutgoingTransfers.delete(msg.transferId);
+      removeTransferCard(msg.transferId);
+      showToast(msg.message || 'Transfer request timed out.');
+    },
     onError: (err) => {
       showToast(err);
     }
@@ -163,8 +190,7 @@
   const peerManager = new PeerConnectionManager({
     signaling,
     onDataChannel: (targetId, channel) => {
-      // Receiver binds incoming data channel
-      transferEngine.bindReceiverChannel(channel);
+      transferEngine.bindReceiverChannel(targetId, channel);
     },
     onError: (targetId, errMessage) => {
       showToast(errMessage);
@@ -178,7 +204,6 @@
   function renderPeers(peers) {
     peerCountEl.textContent = `${peers.length} nearby device${peers.length === 1 ? '' : 's'}`;
 
-    // Clean current peers (leave empty-state element)
     const existingButtons = peersGridEl.querySelectorAll('.peer-btn');
     existingButtons.forEach(btn => btn.remove());
 
@@ -203,14 +228,12 @@
         <span class="peer-platform">${escapeHtml(peer.deviceType)}</span>
       `;
 
-      // Click to select files for this peer
       btn.addEventListener('click', () => {
         selectedTargetPeerId = peer.id;
         fileInputEl.value = '';
         fileInputEl.click();
       });
 
-      // Drag and drop onto specific peer
       btn.addEventListener('dragover', (e) => {
         e.preventDefault();
         btn.classList.add('drag-over');
@@ -243,7 +266,6 @@
     }[m]));
   }
 
-  // --- File Selection & Transfer Flow ---
   fileInputEl.addEventListener('change', () => {
     if (fileInputEl.files && fileInputEl.files.length > 0 && selectedTargetPeerId) {
       initiateSendFiles(selectedTargetPeerId, Array.from(fileInputEl.files));
@@ -253,24 +275,23 @@
   async function initiateSendFiles(targetPeerId, files) {
     if (!files || files.length === 0) return;
 
-    const transferId = 'tx_' + Math.random().toString(36).substring(2, 9);
+    const transferId = 'tx_' + Math.random().toString(36).substring(2, 10);
     const fileSummaries = files.map(f => ({ name: f.name, size: f.size, type: f.type }));
     const totalSize = files.reduce((acc, f) => acc + f.size, 0);
 
-    // Save pending outgoing transfer state
-    window._pendingSend = {
+    // Save pending outgoing transfer state in Map
+    pendingOutgoingTransfers.set(transferId, {
       transferId,
       targetId: targetPeerId,
       files,
-      totalSize
-    };
+      totalSize,
+      createdAt: Date.now()
+    });
 
     showToast(`Requesting transfer approval from recipient...`);
 
-    // Ensure WebRTC connection and data channel is initiated
     await peerManager.createOffer(targetPeerId);
 
-    // Send transfer-request over signaling
     signaling.send({
       type: 'transfer-request',
       target: targetPeerId,
@@ -281,7 +302,7 @@
   }
 
   function handleIncomingTransferRequest(msg) {
-    pendingIncomingTransfer = msg;
+    pendingIncomingRequest = msg;
     requestSenderName.textContent = msg.fromName || 'Office Device';
     requestFileCount.textContent = `${msg.files.length} file${msg.files.length > 1 ? 's' : ''}`;
     requestTotalSize.textContent = formatBytes(msg.totalSize);
@@ -297,42 +318,49 @@
   }
 
   btnAcceptTransfer.addEventListener('click', () => {
-    if (!pendingIncomingTransfer) return;
+    if (!pendingIncomingRequest) return;
+    const req = pendingIncomingRequest;
     modalRequest.style.display = 'none';
+
+    // Authorize transfer in TransferEngine registry
+    transferEngine.authorizeIncomingTransfer(req.transferId, req.from, req.files, req.totalSize);
 
     signaling.send({
       type: 'transfer-response',
-      target: pendingIncomingTransfer.from,
-      transferId: pendingIncomingTransfer.transferId,
+      target: req.from,
+      transferId: req.transferId,
       accepted: true
     });
 
     showToast('Transfer accepted! Receiving files...');
-    pendingIncomingTransfer = null;
+    pendingIncomingRequest = null;
   });
 
   btnRejectTransfer.addEventListener('click', () => {
-    if (!pendingIncomingTransfer) return;
+    if (!pendingIncomingRequest) return;
+    const req = pendingIncomingRequest;
     modalRequest.style.display = 'none';
+
+    transferEngine.revokeIncomingTransfer(req.transferId);
 
     signaling.send({
       type: 'transfer-response',
-      target: pendingIncomingTransfer.from,
-      transferId: pendingIncomingTransfer.transferId,
+      target: req.from,
+      transferId: req.transferId,
       accepted: false
     });
 
     showToast('Transfer declined.');
-    pendingIncomingTransfer = null;
+    pendingIncomingRequest = null;
   });
 
   async function handleTransferResponse(msg) {
-    const pending = window._pendingSend;
-    if (!pending || pending.transferId !== msg.transferId) return;
+    const pending = pendingOutgoingTransfers.get(msg.transferId);
+    if (!pending) return;
 
     if (!msg.accepted) {
       showToast('Transfer request was declined by recipient.');
-      window._pendingSend = null;
+      pendingOutgoingTransfers.delete(msg.transferId);
       return;
     }
 
@@ -342,7 +370,6 @@
     if (channel && channel.readyState === 'open') {
       transferEngine.sendFiles(pending.transferId, pending.targetId, channel, pending.files);
     } else {
-      // If channel is still opening, wait for it
       let attempts = 0;
       const waitInterval = setInterval(() => {
         attempts++;
@@ -357,16 +384,24 @@
       }, 100);
     }
 
-    window._pendingSend = null;
+    pendingOutgoingTransfers.delete(msg.transferId);
   }
 
   function handleTransferCancel(msg) {
     transferEngine.cancelTransfer(msg.transferId);
+    pendingOutgoingTransfers.delete(msg.transferId);
     removeTransferCard(msg.transferId);
-    showToast('Transfer was cancelled by the other device.');
+    showToast(`Transfer was cancelled: ${msg.reason || 'User cancelled'}`);
   }
 
-  // --- Transfer UI Updates ---
+  function setTransferVerifying(transferId, fileName) {
+    const card = document.getElementById(`tx-${transferId}`);
+    if (card) {
+      const meta = card.querySelector(`#tx-meta-${transferId}`);
+      if (meta) meta.textContent = 'Verifying integrity (SHA-256)...';
+    }
+  }
+
   function renderTransferProgress(transferId, p) {
     transfersSection.style.display = 'block';
 
@@ -391,6 +426,11 @@
 
       card.querySelector(`#tx-cancel-${transferId}`).addEventListener('click', () => {
         transferEngine.cancelTransfer(transferId);
+        signaling.send({
+          type: 'transfer-cancel',
+          transferId,
+          reason: 'Cancelled by user.'
+        });
         removeTransferCard(transferId);
         showToast('Transfer cancelled.');
       });
@@ -431,7 +471,7 @@
     item.innerHTML = `
       <div class="completed-details">
         <span class="completed-name">${escapeHtml(fileData.name)}</span>
-        <span class="completed-size">${formatBytes(fileData.size)}</span>
+        <span class="completed-size">${formatBytes(fileData.size)} • Verified</span>
       </div>
       <button class="btn btn-secondary btn-mini" title="Download again">Download</button>
     `;
@@ -443,7 +483,7 @@
     completedList.prepend(item);
   }
 
-  // --- Modals & User Preferences ---
+  // Modals & UI Actions
   btnEditName.addEventListener('click', () => {
     inputDeviceName.value = currentProfile.name;
     modalEditName.style.display = 'flex';
@@ -463,6 +503,20 @@
       signaling.updateName(newName);
     }
     modalEditName.style.display = 'none';
+  });
+
+  btnSubmitAuth.addEventListener('click', () => {
+    const code = inputAccessCode.value.trim();
+    if (code) {
+      localStorage.setItem('dtc_access_code', code);
+      signaling.setAccessCode(code);
+      signaling.send({
+        type: 'join',
+        name: currentProfile.name,
+        deviceType: currentProfile.deviceType,
+        accessCode: code
+      });
+    }
   });
 
   btnNetworkInfo.addEventListener('click', async () => {

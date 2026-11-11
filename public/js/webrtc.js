@@ -1,6 +1,5 @@
 /**
- * DTC Office Share - WebRTC Peer Connection Manager
- * Direct peer-to-peer connection establishment on local LAN (no external STUN/TURN).
+ * DTC Office Share - WebRTC Peer Connection Manager (Harden V2)
  */
 
 class PeerConnectionManager {
@@ -17,16 +16,12 @@ class PeerConnectionManager {
     // Pending ICE candidate queues: targetPeerId -> Array<candidate>
     this.pendingCandidates = new Map();
 
-    // In a pure local LAN office setting without internet, we use empty iceServers
-    // to strictly force local host candidate discovery and avoid external DNS lookups.
+    // Local LAN only - empty iceServers forces host candidates
     this.rtcConfig = {
       iceServers: []
     };
   }
 
-  /**
-   * Get or create an RTCPeerConnection for a target peer.
-   */
   getOrCreateConnection(targetId) {
     if (this.connections.has(targetId)) {
       const pc = this.connections.get(targetId);
@@ -58,11 +53,9 @@ class PeerConnectionManager {
     };
 
     pc.onconnectionstatechange = () => {
-      console.log(`Peer ${targetId} connection state:`, pc.connectionState);
       this.onConnectionStateChange(targetId, pc.connectionState);
 
       if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-        // Fail safely if peer-to-peer connectivity cannot be established
         this.onError(targetId, `LAN P2P connection to peer ${pc.connectionState}. Ensure client isolation is off.`);
       }
     };
@@ -75,20 +68,15 @@ class PeerConnectionManager {
     return pc;
   }
 
-  /**
-   * Configure an RTCDataChannel with backpressure and message handlers.
-   */
   setupDataChannel(targetId, channel) {
     channel.binaryType = 'arraybuffer';
     this.dataChannels.set(targetId, channel);
 
     channel.onopen = () => {
-      console.log(`RTCDataChannel open with ${targetId}`);
       this.onDataChannel(targetId, channel);
     };
 
     channel.onclose = () => {
-      console.log(`RTCDataChannel closed with ${targetId}`);
       this.dataChannels.delete(targetId);
     };
 
@@ -97,18 +85,16 @@ class PeerConnectionManager {
     };
   }
 
-  /**
-   * Initiates a connection to targetId (as the caller).
-   */
   async createOffer(targetId) {
     const pc = this.getOrCreateConnection(targetId);
     if (!pc) return null;
 
-    // Caller creates the RTCDataChannel
-    const channel = pc.createDataChannel('fileTransfer', {
-      ordered: true
-    });
-    this.setupDataChannel(targetId, channel);
+    if (!this.dataChannels.has(targetId)) {
+      const channel = pc.createDataChannel('fileTransfer', {
+        ordered: true
+      });
+      this.setupDataChannel(targetId, channel);
+    }
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
@@ -122,9 +108,6 @@ class PeerConnectionManager {
     return pc;
   }
 
-  /**
-   * Handles incoming signaling messages (offer, answer, ice-candidate).
-   */
   async handleSignal(msg) {
     const fromId = msg.from;
 
@@ -134,7 +117,6 @@ class PeerConnectionManager {
 
       await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
 
-      // Process any pending candidates buffered while awaiting remote description
       const pending = this.pendingCandidates.get(fromId) || [];
       for (const candidate of pending) {
         await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.warn);
@@ -165,7 +147,6 @@ class PeerConnectionManager {
       if (pc && pc.remoteDescription && pc.remoteDescription.type) {
         await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)).catch(console.warn);
       } else {
-        // Buffer candidate until remote description is set
         if (!this.pendingCandidates.has(fromId)) {
           this.pendingCandidates.set(fromId, []);
         }
@@ -203,4 +184,6 @@ class PeerConnectionManager {
   }
 }
 
-window.PeerConnectionManager = PeerConnectionManager;
+if (typeof window !== 'undefined') {
+  window.PeerConnectionManager = PeerConnectionManager;
+}

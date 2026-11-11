@@ -26,7 +26,7 @@ describe('Signaling Server & WebSocket Protocol', () => {
     const messagePromise = new Promise((resolve) => {
       ws.on('message', (data) => {
         const msg = JSON.parse(data.toString());
-        resolve(msg);
+        if (msg.type === 'peers') resolve(msg);
       });
     });
 
@@ -57,7 +57,6 @@ describe('Signaling Server & WebSocket Protocol', () => {
     let peer1Id = null;
     let peer2Id = null;
 
-    // Helper to receive message of specific type
     function waitForMessage(ws, expectedType) {
       return new Promise((resolve) => {
         const onMsg = (data) => {
@@ -91,14 +90,14 @@ describe('Signaling Server & WebSocket Protocol', () => {
     ws1.send(JSON.stringify({
       type: 'transfer-request',
       target: peer2Id,
-      transferId: 'tx-1234',
+      transferId: 'tx_valid1234',
       files: [{ name: 'report.pdf', size: 1024 }],
       totalSize: 1024
     }));
 
     const receivedReq = await transferReqPromise;
     assert.strictEqual(receivedReq.from, peer1Id);
-    assert.strictEqual(receivedReq.transferId, 'tx-1234');
+    assert.strictEqual(receivedReq.transferId, 'tx_valid1234');
     assert.strictEqual(receivedReq.files[0].name, 'report.pdf');
 
     // Test transfer response relay
@@ -106,14 +105,24 @@ describe('Signaling Server & WebSocket Protocol', () => {
     ws2.send(JSON.stringify({
       type: 'transfer-response',
       target: peer1Id,
-      transferId: 'tx-1234',
+      transferId: 'tx_valid1234',
       accepted: true
     }));
 
     const receivedRes = await transferResPromise;
     assert.strictEqual(receivedRes.from, peer2Id);
-    assert.strictEqual(receivedRes.transferId, 'tx-1234');
+    assert.strictEqual(receivedRes.transferId, 'tx_valid1234');
     assert.strictEqual(receivedRes.accepted, true);
+
+    // Test transfer cancellation relay
+    const cancelPromise = waitForMessage(ws2, 'transfer-cancel');
+    ws1.send(JSON.stringify({
+      type: 'transfer-cancel',
+      transferId: 'tx_valid1234',
+      reason: 'User cancelled.'
+    }));
+    const receivedCancel = await cancelPromise;
+    assert.strictEqual(receivedCancel.transferId, 'tx_valid1234');
 
     // Test WebRTC signal relay
     const offerPromise = waitForMessage(ws2, 'signal-offer');
@@ -151,6 +160,69 @@ describe('Signaling Server & WebSocket Protocol', () => {
     const resp = await notFoundPromise;
     assert.strictEqual(resp.type, 'peer-not-found');
     assert.strictEqual(resp.target, 'non-existent-peer-id');
+
+    ws.close();
+  });
+});
+
+describe('Office Access Code Protection', () => {
+  let authApp;
+  const authPort = 3299;
+  const SECRET_CODE = 'OfficePass123';
+
+  before((t, done) => {
+    authApp = createServer({ port: authPort, accessCode: SECRET_CODE });
+    authApp.start(done);
+  });
+
+  after((t, done) => {
+    authApp.close(done);
+  });
+
+  test('rejects connection if access code is missing or invalid', async () => {
+    const ws = new WebSocket(`ws://localhost:${authPort}`);
+    await new Promise((res) => ws.on('open', res));
+
+    const authErrorPromise = new Promise((resolve) => {
+      ws.on('message', (data) => {
+        const msg = JSON.parse(data.toString());
+        if (msg.type === 'auth-error') resolve(msg);
+      });
+    });
+
+    ws.send(JSON.stringify({
+      type: 'join',
+      name: 'Intruder',
+      accessCode: 'wrong-passcode'
+    }));
+
+    const authErr = await authErrorPromise;
+    assert.strictEqual(authErr.type, 'auth-error');
+    assert.strictEqual(authErr.code, 'INVALID_ACCESS_CODE');
+
+    ws.close();
+  });
+
+  test('accepts connection when correct office code is supplied', async () => {
+    const ws = new WebSocket(`ws://localhost:${authPort}`);
+    await new Promise((res) => ws.on('open', res));
+
+    const successPromise = new Promise((resolve) => {
+      ws.on('message', (data) => {
+        const msg = JSON.parse(data.toString());
+        if (msg.type === 'joined-success') resolve(msg);
+      });
+    });
+
+    ws.send(JSON.stringify({
+      type: 'join',
+      name: 'Authorized-PC',
+      accessCode: SECRET_CODE
+    }));
+
+    const success = await successPromise;
+    assert.strictEqual(success.type, 'joined-success');
+    assert.strictEqual(success.self.name, 'Authorized-PC');
 
     ws.close();
   });

@@ -132,6 +132,25 @@
       </div>
     </div>
 
+    <!-- Office Access Code Authentication Modal -->
+    <div class="modal-backdrop" id="modal-auth" style="display: none;">
+      <div class="modal-content modal-sm">
+        <div class="modal-header">
+          <h3>Office Access Code</h3>
+        </div>
+        <div class="modal-body">
+          <p style="font-size:0.85rem; color:var(--text-muted); margin-bottom:0.75rem;">
+            This office share is protected. Enter the shared office passcode to join.
+          </p>
+          <input type="password" id="input-access-code" class="form-input" placeholder="Enter Access Code">
+          <p id="auth-error-msg" style="color:var(--danger); font-size:0.8rem; margin-top:0.4rem;"></p>
+        </div>
+        <div class="modal-actions">
+          <button id="btn-submit-auth" class="btn btn-primary">Join Network</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Edit Device Name Modal -->
     <div class="modal-backdrop" id="modal-edit-name" style="display: none;">
       <div class="modal-content modal-sm">

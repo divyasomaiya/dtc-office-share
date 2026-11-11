@@ -1,4 +1,4 @@
-# Security Documentation
+# Security & Reliability Documentation
 
 ## 1. Threat Model & Design Principles
 
@@ -11,7 +11,56 @@ Its primary architectural design principle is: **Zero External Transmission**.
 
 ---
 
-## 2. Browser Secure Context & WebRTC Requirements
+## 2. Recipient Transfer Authorization
+
+A major security requirement is ensuring that no sender (malicious or otherwise) can force files onto a recipient device without approval:
+
+1. **Authorized Transfer Registry:**
+   The receiver's transfer engine maintains an internal `authorizedTransfers` map keyed by `transferId` and verified against the sender's peer ID.
+2. **Strict Pre-Approval Gate:**
+   If a sender transmits a `file-header` or binary chunk before the recipient clicks **Accept & Download**, or if the `transferId` does not match an approved session, the transfer is immediately rejected, binary chunks are dropped, and an error is raised.
+3. **Cancellation & Expiration:**
+   If either party cancels or if the handshake exceeds 60 seconds, authorization is purged and channels are reset.
+
+---
+
+## 3. File Integrity & Verification
+
+1. **Declared vs. Received Byte Validation:**
+   The receiver tracks received chunk lengths. If total received bytes do not match the sender's declared size, the file is rejected and marked as corrupted.
+2. **Cryptographic SHA-256 Digest:**
+   Before sending, the sender computes the SHA-256 digest (via Web Crypto `crypto.subtle.digest`). Upon receiving all chunks, the receiver independently calculates the SHA-256 digest of the assembled blob. The transfer only completes if the hashes match.
+3. **No Premature Completion:**
+   The UI will not show completion or trigger downloads until integrity verification succeeds.
+
+---
+
+## 4. Large-File Memory Handling & Browser-Specific Limits
+
+Accumulating multi-gigabyte files in RAM can crash browser tabs, particularly on mobile devices:
+
+- **File System Access API (Direct Streaming):**
+  On supported desktop browsers (Chrome, Edge, Opera), files can be written directly to disk chunk by chunk without unbounded memory buildup.
+- **Fallback Memory Cap (iOS Safari & Mobile):**
+  Mobile browsers (specifically iOS Safari) do not yet support `showSaveFilePicker` and impose strict WebKit RAM limits (typically 200 MB–500 MB per tab). DTC Office Share enforces a documented 200 MB memory cap for devices relying on Blob accumulation in RAM. Files exceeding this limit are safely rejected with an informative prompt before transfer begins.
+- **Zero-Byte File Handling:**
+  Empty (0 byte) files are recognized and handled as control-only transfers without allocating empty buffers.
+
+---
+
+## 5. Network Access Control & Origin Validation
+
+1. **Shared Office Access Code:**
+   When configured with `ACCESS_CODE=...`, only users in the office who provide the passcode can join the signaling pool and discover peers.
+2. **WebSocket Origin Validation:**
+   The server checks the HTTP `Origin` header on incoming WebSocket upgrade requests:
+   - Matches the Host header by default to prevent Cross-Site WebSocket Hijacking (CSWSH) from malicious external websites.
+   - Allows explicit whitelist configuration via `ALLOWED_ORIGINS`.
+   - *Limitation:* The `Origin` header provides protection against browser-based drive-by attacks from malicious third-party websites. However, non-browser clients (such as local CLI tools or scripts) can forge headers on the LAN. Thus, office Wi-Fi security (WPA3-Enterprise / WPA2) and optional access codes are the primary defenses.
+
+---
+
+## 6. Browser Secure Context & WebRTC Requirements
 
 Modern web browsers enforce security boundaries around WebRTC and certain web APIs depending on whether the page is served in a **Secure Context** (`https:` or `localhost`).
 
@@ -22,7 +71,7 @@ Modern web browsers enforce security boundaries around WebRTC and certain web AP
   - However, some mobile browsers or specific security settings may flag non-localhost HTTP as "Not Secure".
 
 ### Enabling HTTPS with Local TLS Certificates
-For organizations with strict mobile browser policies requiring full HTTPS secure context:
+For organizations requiring full HTTPS secure context:
 1. Generate a local self-signed or internal CA certificate:
    ```bash
    openssl req -x509 -newkey rsa:2048 -keyout server.key -out server.crt -days 365 -nodes -subj "/CN=office-share.local"
@@ -32,36 +81,3 @@ For organizations with strict mobile browser policies requiring full HTTPS secur
    USE_HTTPS=true SSL_KEY_PATH=./server.key SSL_CERT_PATH=./server.crt npm start
    ```
 3. Install or trust the certificate on the client devices if using an internal private CA.
-
----
-
-## 3. Filename Sanitization & Path Traversal Prevention
-
-When files are received across devices, their filenames originate from the sender's device. To prevent security vulnerabilities on recipient machines:
-
-1. **Path Traversal Protection:**
-   All forward slashes (`/`) and backward slashes (`\`) are stripped via `path.posix.basename`. Files cannot write outside the user's default browser download directory.
-2. **Forbidden Character Cleansing:**
-   Characters forbidden across operating systems (`< > : " / \ | ? *` and ASCII control characters `\x00-\x1F`) are replaced with underscores (`_`).
-3. **Windows Reserved Name Prevention:**
-   DOS/Windows reserved device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1` through `COM9`, `LPT1` through `LPT9`) are automatically prefixed with `safe_` to prevent file system lockup or execution vulnerabilities.
-4. **Filename Length Clamping:**
-   Filenames exceeding 255 characters are truncated to maintain filesystem safety while preserving file extensions.
-
----
-
-## 4. Rate Limiting & Denial of Service Protection
-
-The signaling server implements in-memory sliding-window rate limiting:
-- **Connection Rate Limiter:** Protects against connection flood attacks by limiting client IP handshakes.
-- **Message Frequency Limiter:** Prevents misbehaving clients or scripts from flooding the signaling channel with high-frequency messages.
-- **Payload Size Capping:** Restricts WebSocket message frames to 64 KB, rejecting oversized or malformed frames before JSON deserialization.
-
----
-
-## 5. Network Isolation & AP Isolation Considerations
-
-1. **Client Isolation:**
-   Many enterprise guest networks isolate wireless stations to prevent client-to-client communication. DTC Office Share requires peer-to-peer communication. Ensure users connect to the trusted office LAN or disable AP isolation.
-2. **VLAN Segmentation:**
-   If desktop PCs are on a wired VLAN and mobile devices are on a Wi-Fi VLAN, router firewall rules must allow TCP traffic on port 3000 as well as peer-to-peer UDP traffic for WebRTC.
